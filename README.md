@@ -1,4 +1,4 @@
-# Workbee Smart Post-Process
+# Workbee Smart Post-Processor
 
 A patched FreeCAD post-processor + companion macro for CNC routers running RepRapFirmware (Duet boards), built around **manual tool changes** and **batch G-code export**.
 
