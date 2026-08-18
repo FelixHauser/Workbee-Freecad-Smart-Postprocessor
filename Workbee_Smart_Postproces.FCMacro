@@ -3,18 +3,24 @@
 SmartPostProcess.FCMacro
 
 A FreeCAD macro that gives you a settings dialog for post-processing a CAM
-Job, then exports G-code directly, using one of three modes:
+Job, then exports G-code directly (no FreeCAD save-dialog or editor popups
+in between), using one of four modes:
 
     - Single file    : all active operations, one .nc file
     - Separate files : one .nc file per operation
-    - Grouped by tool : one .nc file per run of consecutive operations
-                         that share the same Tool Controller
+    - Grouped by Tool Controller : one .nc file per run of consecutive
+                         operations that share the same Tool Controller
+    - Grouped by physical tool   : one .nc file per run of consecutive
+                         operations that share the same physical tool
+                         (matched by the embedded Tool Bit's Label)
 
 Every exported file gets its own T-number + M3/M4 spindle-start + a short
 wait injected into its preamble, resolved from that file's actual Tool
 Controller -- so each file is a standalone, runnable program on its own.
-Handles Dressups (RampEntryDressup etc.) correctly for both tool-controller
-resolution and Active toggling. Dialog settings are remembered between runs.
+Handles Dressups (RampEntryDressup etc.) correctly for tool-controller
+resolution and Active toggling. Operations that were already switched off
+before running this macro are never included in any export. Dialog
+settings are remembered between runs.
 """
 
 import os
@@ -66,11 +72,30 @@ def resolve_tool_controller(obj, _seen=None):
     return None
 
 
+def resolve_physical_tool_label(obj):
+    """
+    Group by the actual embedded Tool Bit's Label -- this is the closest
+    proxy FreeCAD gives us for "same physical tool", since diameter alone
+    can't distinguish e.g. a 6mm upcut from a 6mm downcut, and two Tool
+    Controllers using the same real-world bit are still separate, embedded
+    copies internally with no shared identity except whatever Label was
+    given to each. Rename your tools consistently (e.g. both "6mm Alu")
+    if you want this grouping to treat them as the same physical tool.
+    """
+    tc = resolve_tool_controller(obj)
+    if tc is None:
+        return None
+    tool = getattr(tc, "Tool", None)
+    if tool is None:
+        return None
+    return tool.Label
+
+
 def resolve_active_target(obj, _seen=None):
     """
     Dressups (RampEntryDressup, etc.) don't have their own Active property
     -- only real operations do. Walk down through .Base until we find an
-    object that actually has Active, and toggle that one instead.
+    object that actually has Active, and use that one instead.
     """
     if _seen is None:
         _seen = set()
@@ -106,6 +131,12 @@ def load_post_module(path):
 
 
 def build_groups(items, mode):
+    """
+    items: ordered list of top-level operation/dressup objects that have
+           a resolvable Tool Controller.
+    mode:  "single" | "separate" | "grouped" | "physical"
+    Returns a list of groups, each group a list of objects.
+    """
     if mode == "single":
         return [items] if items else []
 
@@ -113,25 +144,32 @@ def build_groups(items, mode):
         return [[item] for item in items]
 
     if mode == "grouped":
-        groups = []
-        current = []
-        current_tc_name = None
-        for item in items:
-            tc = resolve_tool_controller(item)
-            tc_name = tc.Name if tc is not None else None
-            if current and tc_name != current_tc_name:
-                groups.append(current)
-                current = []
-            current.append(item)
-            current_tc_name = tc_name
-        if current:
-            groups.append(current)
-        return groups
+        return _group_by_key(items, lambda item: getattr(resolve_tool_controller(item), "Name", None))
+
+    if mode == "physical":
+        return _group_by_key(items, resolve_physical_tool_label)
 
     raise ValueError("Unknown export mode: {}".format(mode))
 
 
+def _group_by_key(items, key_fn):
+    groups = []
+    current = []
+    current_key = None
+    for item in items:
+        key = key_fn(item)
+        if current and key != current_key:
+            groups.append(current)
+            current = []
+        current.append(item)
+        current_key = key
+    if current:
+        groups.append(current)
+    return groups
+
+
 def group_label(group):
+    """Build a human-readable label for a group, for the filename."""
     tc = resolve_tool_controller(group[0]) if group else None
     tc_label = sanitize_filename(tc.Label) if tc is not None else "unknown_tool"
     if len(group) == 1:
@@ -207,10 +245,32 @@ class SmartPostDialog(QtWidgets.QDialog):
         mode_layout = QtWidgets.QVBoxLayout(mode_box)
         self.mode_single = QtWidgets.QRadioButton("Single combined file")
         self.mode_separate = QtWidgets.QRadioButton("One file per operation")
-        self.mode_grouped = QtWidgets.QRadioButton("Grouped by consecutive same tool")
-        self.mode_grouped.setChecked(True)
-        for w in (self.mode_single, self.mode_separate, self.mode_grouped):
+        self.mode_grouped = QtWidgets.QRadioButton("Grouped by consecutive same Tool Controller")
+        self.mode_physical = QtWidgets.QRadioButton(
+            "Grouped by consecutive same physical tool (by Tool Bit label)"
+        )
+        self.mode_physical.setChecked(True)
+        for w in (self.mode_single, self.mode_separate, self.mode_grouped, self.mode_physical):
             mode_layout.addWidget(w)
+
+        physical_note = QtWidgets.QLabel(
+            "⚠ Groups by the Tool Bit's Label, not its diameter. Two Tool\n"
+            "Controllers using the same physical bit must have the SAME Label\n"
+            "(e.g. both \"6mm Alu\") to be merged -- rename them to match if needed."
+        )
+        physical_note.setStyleSheet("color: #a05a00; font-size: 11px;")
+        physical_note.setWordWrap(True)
+        mode_layout.addWidget(physical_note)
+
+        def toggle_physical_note():
+            physical_note.setVisible(self.mode_physical.isChecked())
+
+        self.mode_single.toggled.connect(toggle_physical_note)
+        self.mode_separate.toggled.connect(toggle_physical_note)
+        self.mode_grouped.toggled.connect(toggle_physical_note)
+        self.mode_physical.toggled.connect(toggle_physical_note)
+        toggle_physical_note()
+
         layout.addWidget(mode_box)
 
         # --- WCS reminder --------------------------------------------------
@@ -251,9 +311,11 @@ class SmartPostDialog(QtWidgets.QDialog):
             eoj, self.eoj_none
         ).setChecked(True)
 
-        mode = s.value("export_mode", "grouped")
+        mode = s.value("export_mode", "physical")
         {"single": self.mode_single, "separate": self.mode_separate,
-         "grouped": self.mode_grouped}.get(mode, self.mode_grouped).setChecked(True)
+         "grouped": self.mode_grouped, "physical": self.mode_physical}.get(
+            mode, self.mode_physical
+        ).setChecked(True)
 
     def _save_settings(self):
         s = self.settings
@@ -280,7 +342,9 @@ class SmartPostDialog(QtWidgets.QDialog):
             return "single"
         if self.mode_separate.isChecked():
             return "separate"
-        return "grouped"
+        if self.mode_grouped.isChecked():
+            return "grouped"
+        return "physical"
 
     def get_postamble_extra(self):
         if self.eoj_home_z.isChecked():
@@ -355,15 +419,25 @@ def main():
 
     mode = dialog.get_export_mode()
 
-    all_items = [
-        item for item in job.Operations.Group
-        if resolve_tool_controller(item) is not None
-    ]
+    # Build the ordered list of top-level operations/dressups that:
+    #   1. actually resolve to a Tool Controller (skips Model/Stock/etc.
+    #      if they somehow ended up in Operations), and
+    #   2. were ALREADY Active before we touched anything -- an operation
+    #      deliberately switched off should never be swept into an
+    #      export, forced Active for one file, then restored.
+    all_items = []
+    for item in job.Operations.Group:
+        if resolve_tool_controller(item) is None:
+            continue
+        target = resolve_active_target(item)
+        if target is None or not target.Active:
+            continue
+        all_items.append(item)
 
     if not all_items:
         QtWidgets.QMessageBox.critical(
             None, "Smart Post-Process",
-            "No operations with a resolvable Tool Controller were found."
+            "No active operations with a resolvable Tool Controller were found."
         )
         return
 
@@ -381,8 +455,6 @@ def main():
     if not os.path.isdir(OUTPUT_FOLDER):
         os.makedirs(OUTPUT_FOLDER)
 
-    # Map each top-level item to whatever object actually holds Active
-    # (itself for normal operations, the wrapped base op for Dressups).
     active_targets = {item.Name: resolve_active_target(item) for item in all_items}
     original_active = {
         t.Name: t.Active for t in active_targets.values() if t is not None
