@@ -1,10 +1,10 @@
-# Workbee Smart Post-Processor
+# Workbee Smart Post-Process
 
 A patched FreeCAD post-processor + companion macro for CNC routers running RepRapFirmware (Duet boards), built around **manual tool changes** and **batch G-code export**.
 
 Instead of manually toggling operations Active/Inactive and re-typing Post Processor Args every time you export, this gives you a settings dialog that remembers your preferences and exports correctly-grouped, standalone-runnable G-code files in one click.
 
-Based on [my first Workbee_post.py`](https://github.com/FelixHauser/Workbee-Freecad-Postprocessor) (LGPL-2.1-or-later), itself derived from the original FreeCAD RRF post processor (sliptonic, Gauthier Briere, Schildkroet, Gary L Hasson).
+Based on [my first `Workbee_post.py`](https://github.com/FelixHauser/Workbee-Freecad-Postprocessor) (LGPL-2.1-or-later), itself derived from the original FreeCAD RRF post processor (sliptonic, Gauthier Briere, Schildkroet, Gary L Hasson).
 
 ---
 
@@ -15,6 +15,7 @@ Based on [my first Workbee_post.py`](https://github.com/FelixHauser/Workbee-Free
   - **One file per operation** — every operation gets its own file.
   - **Grouped by consecutive same tool** — consecutive operations sharing a Tool Controller are merged into one file; the file boundary falls wherever the Tool Controller actually changes.
 - **Every exported file is standalone-runnable.** Each file gets its own `T<number>` + `M3`/`M4 S<speed>` + a short spin-up wait injected into its preamble, resolved from that file's actual Tool Controller — not dependent on FreeCAD's "first use in the job" logic, which otherwise leaves later operations with no tool/spindle setup at all if exported on their own.
+- **Operations you've already switched off (Active = No) are never included in any export.** If you deliberately disabled an operation before running the macro, it stays excluded from every file — it is never temporarily turned on to satisfy a group, then switched back off.
 - Correctly handles **Path Dressups** (Ramp Entry, etc.) for both tool-controller resolution and Active-toggling, since Dressups don't expose these properties directly and need to be resolved through the operation they wrap.
 - No FreeCAD save-dialog or G-code preview popup interrupts the batch — files are written straight to a folder you configure once.
 - Dialog settings (tool override, spindle text, end-of-job choice, export mode) are **remembered between runs and across FreeCAD restarts**.
@@ -35,7 +36,8 @@ Two files, used together:
 
 The macro walks the Job's `Operations` list top to bottom (the literal order in the FreeCAD tree — it does **not** sort by operation label/number), resolves each item's Tool Controller (unwrapping Dressups where needed), splits the list into groups according to the chosen export mode, and for each group:
 
-- Toggles the correct operations Active/Inactive (also resolved through Dressups, since Dressups don't have their own `Active` property — the wrapped base operation does).
+- Only considers operations that were **already Active** before the macro started — anything you'd deliberately switched off is filtered out up front and excluded from every group, not just skipped for one file and swept into another.
+- Toggles the correct operations Active/Inactive within that filtered set (also resolved through Dressups, since Dressups don't have their own `Active` property — the wrapped base operation does).
 - Builds that group's preamble/postamble from the dialog settings + that group's actual Tool Controller.
 - Calls `export()` to write the file.
 - Restores every operation's original Active state when done, even if an error occurs mid-export.
