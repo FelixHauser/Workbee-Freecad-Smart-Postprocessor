@@ -1,4 +1,4 @@
-# Workbee Smart Post-Process
+# Workbee Smart Post-Processor
 
 A patched FreeCAD post-processor + companion macro for CNC routers running RepRapFirmware (Duet boards), built around **manual tool changes** and **batch G-code export**.
 
@@ -10,10 +10,11 @@ Based on [my first `Workbee_post.py`](https://github.com/FelixHauser/Workbee-Fre
 
 ## What it does
 
-- Exports a FreeCAD CAM Job to one or more `.nc` files, in one of three modes:
+- Exports a FreeCAD CAM Job to one or more `.nc` files, in one of four modes:
   - **Single combined file** — everything in one file.
   - **One file per operation** — every operation gets its own file.
-  - **Grouped by consecutive same tool** — consecutive operations sharing a Tool Controller are merged into one file; the file boundary falls wherever the Tool Controller actually changes.
+  - **Grouped by consecutive same Tool Controller** — consecutive operations sharing a Tool Controller are merged into one file; the file boundary falls wherever the Tool Controller changes.
+  - **Grouped by consecutive same physical tool** *(default)* — consecutive operations sharing the same physical bit (matched by Tool Bit Label) are merged into one file, even across different Tool Controllers — e.g. a "rough" pass and a "finish" pass on the same 6mm endmill end up in one file, since there's no reason to stop and swap tools between them.
 - **Every exported file is standalone-runnable.** Each file gets its own `T<number>` + `M3`/`M4 S<speed>` + a short spin-up wait injected into its preamble, resolved from that file's actual Tool Controller — not dependent on FreeCAD's "first use in the job" logic, which otherwise leaves later operations with no tool/spindle setup at all if exported on their own.
 - **Operations you've already switched off (Active = No) are never included in any export.** If you deliberately disabled an operation before running the macro, it stays excluded from every file — it is never temporarily turned on to satisfy a group, then switched back off.
 - Correctly handles **Path Dressups** (Ramp Entry, etc.) for both tool-controller resolution and Active-toggling, since Dressups don't expose these properties directly and need to be resolved through the operation they wrap.
@@ -100,13 +101,15 @@ In your CAM Job's Output settings, set **Processor** to the new script (it'll sh
 
 1. Open your FreeCAD document, with the CAM Job set up as normal (operations, tools, etc.).
 2. **Macro → Macros...** → select `SmartPostProcess` → **Execute** (or use a toolbar button/shortcut if you've bound one).
-3. Configure the dialog (see Options below) and click **OK**.
+3. Configure the dialog (see [Options](#options) below, and the screenshot there) and click **OK**.
 4. Files are written silently to `OUTPUT_FOLDER`. A summary popup lists what was exported, along with the WCS reminder.
 5. **Before running any file on the machine: confirm the correct work coordinate system (G54/G55/...) is selected** — this macro never sets it for you.
 
 ---
 
 ## Options
+
+![Smart Post-Process dialog](dialog.png)
 
 ### Tool number
 - **Force all tools to number: [N]** — when checked, every exported file uses `T<N>` regardless of what the Tool Controller/library actually specifies. Useful on a manual-tool-change machine where the firmware only ever has one tool slot defined, so `T2`, `T3`, etc. from FreeCAD's internal numbering would otherwise be meaningless (or throw an error) on the controller.
@@ -127,7 +130,8 @@ One of:
 ### Export mode
 - **Single combined file** — one `.nc` file containing every active operation.
 - **One file per operation** — every operation, including each Dressup, gets its own file.
-- **Grouped by consecutive same tool** *(default)* — operations are merged into a file for as long as consecutive operations share the same Tool Controller; a new file starts wherever the Tool Controller changes. This is the mode that maps most naturally onto real manual tool-change workflow: one file per physical tool swap.
+- **Grouped by consecutive same Tool Controller** — a new file starts wherever the Tool Controller changes. Note this can still split apart operations that use the exact same physical bit, if they were set up under two different Tool Controllers (e.g. a "rough" TC and a "finish" TC both pointing at the same 6mm endmill).
+- **Grouped by consecutive same physical tool** *(default)* — groups by the embedded Tool Bit's **Label** instead of the Tool Controller. This is the mode that actually maps onto a real manual tool-change: as long as consecutive operations use a Tool Bit with the same Label, they land in the same file, even if their Tool Controllers (and therefore feeds/speeds) differ. **This only works correctly if you keep matching physical tools' Labels identical** — e.g. if a "rough" and a "finish" Tool Controller both use your one 6mm bit, make sure both show the same Tool Bit Label ("6mm Alu", not "6mm Alu" and "6mm Alu001"). The dialog shows a warning reminding you of this whenever this mode is selected.
 
 ### Settings persistence
 All of the above is saved via `QSettings` (a native per-OS preferences store — a `.plist` on macOS, the Registry on Windows, an `.ini` file on Linux) whenever you click **OK**. Clicking **Cancel** does not save, so you can try different settings without committing them. Settings persist across FreeCAD restarts.
@@ -136,6 +140,7 @@ All of the above is saved via `QSettings` (a native per-OS preferences store —
 
 ## Known limitations / things to double-check
 
+- **"Grouped by consecutive same physical tool" depends entirely on Tool Bit Labels matching exactly.** FreeCAD embeds an independent copy of a Tool Bit into the document every time it's added to a new Tool Controller — there's no other shared identity linking "this Tool Controller's bit" to "that Tool Controller's bit" as the same physical tool. If their Labels drift apart (including via the duplicate-label auto-increment FreeCAD sometimes applies, e.g. turning "6mm Alu" into "6mm Alu001"), they'll be treated as different tools and split into separate files.
 - **Operation order in the exported files follows the literal FreeCAD tree order**, not the numbers in your operation labels. If a Dressup gets inserted somewhere unexpected in the tree (this can happen when first creating one), it will export out of the sequence its label suggests. After adding any Dressup, glance at the Operations list to confirm it landed where you expect.
 - **Dressup handling has been verified against `RampEntryDressup` only.** Other Dressup types (Dogbone, Tag, Drag Knife) follow the same underlying pattern (`.Base` pointing to the wrapped operation, no direct `ToolController`/`Active` of their own) and should work identically, but haven't been individually tested.
 - **Work coordinate system is never touched** — see "What it deliberately does NOT do" above. Always double check.
