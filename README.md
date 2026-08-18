@@ -4,7 +4,7 @@ A patched FreeCAD post-processor + companion macro for CNC routers running RepRa
 
 Instead of manually toggling operations Active/Inactive and re-typing Post Processor Args every time you export, this gives you a settings dialog that remembers your preferences and exports correctly-grouped, standalone-runnable G-code files in one click.
 
-Based on [Felix Hauser's `Workbee_post.py`](https://github.com/FelixHauser/Workbee-Freecad-Postprocessor) (LGPL-2.1-or-later), itself derived from the original FreeCAD RRF post processor (sliptonic, Gauthier Briere, Schildkroet, Gary L Hasson).
+Based on [my first Workbee_post.py`](https://github.com/FelixHauser/Workbee-Freecad-Postprocessor) (LGPL-2.1-or-later), itself derived from the original FreeCAD RRF post processor (sliptonic, Gauthier Briere, Schildkroet, Gary L Hasson).
 
 ---
 
